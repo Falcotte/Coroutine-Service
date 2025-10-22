@@ -19,7 +19,7 @@ namespace AngryKoala.Coroutines
 
         private float _pauseStartRealtime;
         private float _totalPauseDuration;
-
+        
         private void OnEnable()
         {
             _isEditorPaused = false;
@@ -279,7 +279,7 @@ namespace AngryKoala.Coroutines
             }
         }
 
-        public IReadOnlyList<CoroutineData> GetProperties()
+        public IReadOnlyList<CoroutineData> GetData()
         {
             List<CoroutineData> list = new List<CoroutineData>(_coroutineData.Count);
             
@@ -294,7 +294,7 @@ namespace AngryKoala.Coroutines
             return list;
         }
 
-        public IReadOnlyList<CoroutineData> GetProperties(MonoBehaviour owner)
+        public IReadOnlyList<CoroutineData> GetData(MonoBehaviour owner)
         {
             if (owner == null)
             {
@@ -318,7 +318,7 @@ namespace AngryKoala.Coroutines
             return list;
         }
 
-        public IReadOnlyList<CoroutineData> GetProperties(string tag)
+        public IReadOnlyList<CoroutineData> GetData(string tag)
         {
             if (string.IsNullOrEmpty(tag))
             {
@@ -395,6 +395,7 @@ namespace AngryKoala.Coroutines
             
             CoroutineData data = new CoroutineData
             {
+                Coroutine = coroutine,
                 Owner = owner,
                 Tag = tag,
                 RoutineTypeName = routineTypeName,

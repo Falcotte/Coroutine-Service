@@ -24,9 +24,9 @@ namespace AngryKoala.Coroutines
         void StopAll(MonoBehaviour owner);
         void StopAll(string tag);
         
-        IReadOnlyList<CoroutineData> GetProperties();
-        IReadOnlyList<CoroutineData> GetProperties(MonoBehaviour owner);
-        IReadOnlyList<CoroutineData> GetProperties(string tag);
+        IReadOnlyList<CoroutineData> GetData();
+        IReadOnlyList<CoroutineData> GetData(MonoBehaviour owner);
+        IReadOnlyList<CoroutineData> GetData(string tag);
         
         int GetActiveCoroutineCount();
     }
