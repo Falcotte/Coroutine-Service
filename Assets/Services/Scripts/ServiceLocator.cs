@@ -6,8 +6,8 @@ namespace AngryKoala.Services
 {
     public static class ServiceLocator
     {
-        private static readonly Dictionary<Type, IService> Services = new();
-
+        private static readonly Dictionary<Type, IService> _servicesByType = new();
+        
         public static event Action<IService> OnServiceRegistered;
         public static event Action<IService> OnServiceDeregistered;
 
@@ -15,7 +15,7 @@ namespace AngryKoala.Services
         {
             var type = typeof(T);
 
-            if (!Services.TryAdd(type, service))
+            if (!_servicesByType.TryAdd(type, service))
             {
                 Debug.LogWarning($"{service.GetType().Name} is already registered as {type.Name}");
                 return;
@@ -29,7 +29,7 @@ namespace AngryKoala.Services
         {
             var type = typeof(T);
 
-            if (Services.Remove(type))
+            if (_servicesByType.Remove(type))
             {
                 OnServiceDeregistered?.Invoke(service);
                 Debug.Log($"{type.Name} deregistered");
@@ -42,7 +42,7 @@ namespace AngryKoala.Services
 
         public static T Get<T>() where T : IService
         {
-            if (Services.TryGetValue(typeof(T), out var service))
+            if (_servicesByType.TryGetValue(typeof(T), out var service))
             {
                 return (T)service;
             }
