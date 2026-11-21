@@ -8,26 +8,31 @@ namespace AngryKoala.Coroutines
 {
     public interface ICoroutineService : IService
     {
-        Coroutine Run(IEnumerator routine);
-        Coroutine Run(IEnumerator routine, string tag);
-        Coroutine Run(MonoBehaviour owner, IEnumerator routine);
-        Coroutine Run(MonoBehaviour owner, IEnumerator routine, string tag);
-        
-        Coroutine RunDelayed(Action action, float delaySeconds);
-        Coroutine RunDelayed(Action action, float delaySeconds, string tag);
-        Coroutine RunDelayed(MonoBehaviour owner, Action action, float delaySeconds);
-        Coroutine RunDelayed(MonoBehaviour owner, Action action, float delaySeconds, string tag);
-        
+        int ActiveCoroutineCount { get; }
+
+        /// <summary>
+        /// Runs the routine on the service. With an owner, the routine ends when the owner is destroyed or its
+        /// GameObject becomes inactive. Returns null when the routine finished before this call returned.
+        /// </summary>
+        Coroutine Run(IEnumerator routine, MonoBehaviour owner = null, string tag = null);
+
+        /// <summary>
+        /// Calls the action after the delay. A delay of zero or less calls it before this method returns.
+        /// </summary>
+        Coroutine RunDelayed(Action action, float delaySeconds, DelayTime delayTime = DelayTime.Scaled,
+            MonoBehaviour owner = null, string tag = null);
+
+        Coroutine RunNextFrame(Action action, MonoBehaviour owner = null, string tag = null);
+
         void Stop(Coroutine coroutine);
-        
+
         void StopAll();
         void StopAll(MonoBehaviour owner);
         void StopAll(string tag);
-        
-        IReadOnlyList<CoroutineData> GetData();
-        IReadOnlyList<CoroutineData> GetData(MonoBehaviour owner);
-        IReadOnlyList<CoroutineData> GetData(string tag);
-        
-        int GetActiveCoroutineCount();
+
+        /// <summary>
+        /// Clears the list and fills it with a snapshot of every running coroutine. Meant for tools.
+        /// </summary>
+        void GetData(List<CoroutineData> results);
     }
 }

@@ -1,0 +1,13 @@
+{
+    "name": "com.angrykoala.coroutines",
+    "version": "2.0.0",
+    "displayName": "Angry Koala Coroutines",
+    "description": "A coroutine service for Unity: runs coroutines in one place, tracks them by owner and tag, and stops them when their owner goes away.",
+    "unity": "6000.3",
+    "author": {
+        "name": "Angry Koala"
+    },
+    "dependencies": {
+        "com.angrykoala.services": "2.0.0"
+    }
+}
