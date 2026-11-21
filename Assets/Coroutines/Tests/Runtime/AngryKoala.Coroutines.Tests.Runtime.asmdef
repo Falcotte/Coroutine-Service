@@ -1,0 +1,22 @@
+{
+    "name": "AngryKoala.Coroutines.Tests.Runtime",
+    "rootNamespace": "AngryKoala.Coroutines.Tests",
+    "references": [
+        "AngryKoala.Coroutines",
+        "AngryKoala.Services",
+        "UnityEngine.TestRunner"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "nunit.framework.dll"
+    ],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "UNITY_INCLUDE_TESTS"
+    ],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
