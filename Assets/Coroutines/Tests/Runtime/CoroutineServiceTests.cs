@@ -108,13 +108,13 @@ namespace AngryKoala.Coroutines.Tests
         {
             bool actionRan = false;
 
-            _service.RunDelayed(() => actionRan = true, 0.1f);
+            _service.RunDelayed(() => actionRan = true, 0.5f);
 
             yield return null;
 
             Assert.That(actionRan, Is.False);
 
-            yield return new WaitForSeconds(0.3f);
+            yield return new WaitForSeconds(0.8f);
 
             Assert.That(actionRan, Is.True);
             Assert.That(GetActiveCount(), Is.EqualTo(0));
@@ -272,16 +272,101 @@ namespace AngryKoala.Coroutines.Tests
         [UnityTest]
         public IEnumerator RoutineThatThrows_EndsAndLeavesNoRecord()
         {
-            LogAssert.ignoreFailingMessages = true;
-
             _service.Run(ThrowOnSecondStep());
 
-            yield return null;
-            yield return null;
+            LogAssert.Expect(LogType.Error, new Regex("ThrowOnSecondStep"));
+            LogAssert.Expect(LogType.Exception, new Regex("Test exception"));
 
-            LogAssert.ignoreFailingMessages = false;
+            yield return null;
+            yield return null;
 
             Assert.That(GetActiveCount(), Is.EqualTo(0));
+        }
+
+        [UnityTest]
+        public IEnumerator NestedRoutineThatThrows_IsLoggedAndLeavesNoRecord()
+        {
+            _service.Run(RunNested(ThrowOnSecondStep()), tag: _tag);
+
+            LogAssert.Expect(LogType.Error, new Regex("RunNested.*tag: test-tag"));
+            LogAssert.Expect(LogType.Exception, new Regex("Test exception"));
+
+            yield return null;
+            yield return null;
+
+            Assert.That(GetActiveCount(), Is.EqualTo(0));
+        }
+
+        [UnityTest]
+        public IEnumerator NestedRoutine_RunsToTheEndAndThenTheOuterContinues()
+        {
+            _service.Run(RunNested(WaitFrames(2)));
+
+            yield return null;
+
+            Assert.That(_stepCount, Is.EqualTo(0));
+            Assert.That(GetActiveCount(), Is.EqualTo(1));
+
+            yield return null;
+            yield return null;
+            yield return null;
+
+            Assert.That(_stepCount, Is.EqualTo(1));
+            Assert.That(GetActiveCount(), Is.EqualTo(0));
+        }
+
+        [UnityTest]
+        public IEnumerator NestedRoutine_StopsWithItsOwnerInTheSameFrame()
+        {
+            PlayModeTestOwner owner = Create<PlayModeTestOwner>("Owner");
+
+            RunOwned(RunNested(CountFrames()), owner);
+
+            yield return null;
+
+            int stepCountBeforeDeactivate = _stepCount;
+            owner.gameObject.SetActive(false);
+
+            yield return null;
+            yield return null;
+
+            Assert.That(_stepCount, Is.EqualTo(stepCountBeforeDeactivate));
+            Assert.That(GetActiveCount(), Is.EqualTo(0));
+        }
+
+        [UnityTest]
+        public IEnumerator CustomYieldInstruction_IsWaitedFor()
+        {
+            bool isReady = false;
+
+            _service.Run(WaitUntilThenCount(() => isReady));
+
+            yield return null;
+            yield return null;
+
+            Assert.That(_stepCount, Is.EqualTo(0));
+
+            isReady = true;
+
+            yield return null;
+            yield return null;
+
+            Assert.That(_stepCount, Is.EqualTo(1));
+            Assert.That(GetActiveCount(), Is.EqualTo(0));
+        }
+
+        [UnityTest]
+        public IEnumerator StopAllWithTag_FromInsideTheFirstStep_LeavesNoRecord()
+        {
+            Coroutine coroutine = RunTagged(StopTagOnFirstStep(), _tag);
+
+            Assert.That(coroutine, Is.Null);
+            Assert.That(GetActiveCount(), Is.EqualTo(0));
+
+            yield return null;
+            yield return null;
+
+            Assert.That(_stepCount, Is.EqualTo(0));
         }
 
         [UnityTest]
@@ -507,11 +592,17 @@ namespace AngryKoala.Coroutines.Tests
             Assert.That(ServiceLocator.TryGet(out ICoroutineService registeredService), Is.True);
             Assert.That(registeredService, Is.SameAs(_service));
 
+            IService deregisteredService = null;
+            Action<Type, IService> onDeregistered = (_, service) => deregisteredService = service;
+            ServiceLocator.OnServiceDeregistered += onDeregistered;
+
             Object.Destroy(_service.gameObject);
 
             yield return null;
 
-            Assert.That(ServiceLocator.IsRegistered<ICoroutineService>(), Is.False);
+            ServiceLocator.OnServiceDeregistered -= onDeregistered;
+
+            Assert.That(deregisteredService, Is.SameAs(_service));
         }
 
         #region Utility
@@ -545,6 +636,29 @@ namespace AngryKoala.Coroutines.Tests
             {
                 yield return null;
             }
+        }
+
+        private IEnumerator RunNested(IEnumerator nestedRoutine)
+        {
+            yield return nestedRoutine;
+
+            _stepCount++;
+        }
+
+        private IEnumerator WaitUntilThenCount(Func<bool> isReady)
+        {
+            yield return new WaitUntil(isReady);
+
+            _stepCount++;
+        }
+
+        private IEnumerator StopTagOnFirstStep()
+        {
+            _service.StopAll(_tag);
+
+            yield return null;
+
+            _stepCount++;
         }
 
         private IEnumerator WaitSeconds(float seconds)

@@ -33,10 +33,6 @@ namespace AngryKoala.Coroutines
 
         private bool _sortAscending;
 
-        private Texture2D _darkTexture;
-        private Texture2D _lightTexture;
-        private Texture2D _headerDarkTexture;
-        private Texture2D _headerLightTexture;
 
         private const string _autoRefreshPref = "CoroutineInspector.AutoRefresh";
         private const string _searchStringPref = "CoroutineInspector.Search";
@@ -63,6 +59,11 @@ namespace AngryKoala.Coroutines
         private static GUIStyle _headerStyle;
         private static GUIStyle _backgroundStyle;
         private static GUIStyle _miniButtonStyle;
+
+        private static Texture2D _darkTexture;
+        private static Texture2D _lightTexture;
+        private static Texture2D _headerDarkTexture;
+        private static Texture2D _headerLightTexture;
 
         private void OnEnable()
         {
@@ -103,7 +104,7 @@ namespace AngryKoala.Coroutines
                 return;
             }
 
-            if (_service == null)
+            if (!HasLiveService())
             {
                 ServiceLocator.TryGet(out _service);
             }
@@ -116,7 +117,7 @@ namespace AngryKoala.Coroutines
                 return;
             }
 
-            if (_service == null)
+            if (!HasLiveService())
             {
                 GetService();
             }
@@ -161,7 +162,7 @@ namespace AngryKoala.Coroutines
                 return;
             }
 
-            if (_service == null)
+            if (!HasLiveService())
             {
                 EditorGUILayout.HelpBox("CoroutineService not found in the scene.", MessageType.Warning);
                 return;
@@ -170,9 +171,12 @@ namespace AngryKoala.Coroutines
             GUILayout.Space(_filtersInitialSpacing);
             DrawFilters();
 
-            _service.GetData(_rows);
-            FilterRows();
-            SortRows();
+            if (Event.current.type == EventType.Layout)
+            {
+                _service.GetData(_rows);
+                FilterRows();
+                SortRows();
+            }
 
             GUILayout.Space(_headerSpacing);
 
@@ -312,14 +316,32 @@ namespace AngryKoala.Coroutines
                 return;
             }
 
-            _service?.StopAll(tag.Trim());
+            if (!HasLiveService())
+            {
+                return;
+            }
+
+            string trimmedTag = tag.Trim();
+
+            _service.GetData(_rows);
+
+            foreach (CoroutineData row in _rows)
+            {
+                if (string.Equals(row.Tag, trimmedTag, StringComparison.OrdinalIgnoreCase))
+                {
+                    _service.Stop(row.Coroutine);
+                }
+            }
 
             Repaint();
         }
 
         private void StopAll()
         {
-            _service?.StopAll();
+            if (HasLiveService())
+            {
+                _service.StopAll();
+            }
 
             Repaint();
         }
@@ -473,7 +495,7 @@ namespace AngryKoala.Coroutines
 
         private void SetGUIStyles()
         {
-            if (_headerStyle != null)
+            if (_headerStyle != null && _darkTexture != null)
             {
                 return;
             }
@@ -548,6 +570,11 @@ namespace AngryKoala.Coroutines
             };
 
             return _sortAscending ? result : -result;
+        }
+
+        private bool HasLiveService()
+        {
+            return _service is UnityEngine.Object serviceObject ? serviceObject != null : _service != null;
         }
 
         private static string GetOwnerName(CoroutineData data)

@@ -168,6 +168,11 @@ namespace AngryKoala.Coroutines
 
             if (trackedRoutine.IsFinished)
             {
+                if (coroutine != null)
+                {
+                    StopCoroutine(coroutine);
+                }
+
                 return null;
             }
 
@@ -193,6 +198,27 @@ namespace AngryKoala.Coroutines
         }
 
         #endregion
+
+        private static IEnumerator DelayRoutine(Action action, float delaySeconds, DelayTime delayTime)
+        {
+            float remainingSeconds = delaySeconds;
+
+            while (remainingSeconds > 0f)
+            {
+                yield return null;
+
+                remainingSeconds -= delayTime == DelayTime.Unscaled ? Time.unscaledDeltaTime : Time.deltaTime;
+            }
+
+            action.Invoke();
+        }
+
+        private static IEnumerator NextFrameRoutine(Action action)
+        {
+            yield return null;
+
+            action.Invoke();
+        }
 
         private void RemoveTrackedRoutine(TrackedRoutine trackedRoutine)
         {
@@ -268,30 +294,9 @@ namespace AngryKoala.Coroutines
             return compilerName.Substring(nameStart, nameLength);
         }
 
-        private static IEnumerator DelayRoutine(Action action, float delaySeconds, DelayTime delayTime)
-        {
-            float remainingSeconds = delaySeconds;
-
-            while (remainingSeconds > 0f)
-            {
-                yield return null;
-
-                remainingSeconds -= delayTime == DelayTime.Unscaled ? Time.unscaledDeltaTime : Time.deltaTime;
-            }
-
-            action.Invoke();
-        }
-
-        private static IEnumerator NextFrameRoutine(Action action)
-        {
-            yield return null;
-
-            action.Invoke();
-        }
-
         private sealed class TrackedRoutine : IEnumerator
         {
-            public object Current => _routine.Current;
+            public object Current { get; private set; }
 
             public Coroutine Coroutine { get; set; }
             public bool IsFinished { get; set; }
@@ -306,6 +311,8 @@ namespace AngryKoala.Coroutines
 
             private readonly CoroutineService _service;
             private readonly IEnumerator _routine;
+
+            private List<IEnumerator> _nestedRoutines;
 
             public TrackedRoutine(CoroutineService service, IEnumerator routine, MonoBehaviour owner, bool hasOwner,
                 string tag, string routineName)
@@ -339,7 +346,7 @@ namespace AngryKoala.Coroutines
 
                 try
                 {
-                    hasNext = _routine.MoveNext();
+                    hasNext = StepRoutines();
                 }
                 catch (Exception exception)
                 {
@@ -353,6 +360,37 @@ namespace AngryKoala.Coroutines
                 }
 
                 return true;
+            }
+
+            // Steps nested routines here instead of handing them to Unity, so that every step of them is
+            // covered by the owner check and the exception handling in MoveNext.
+            private bool StepRoutines()
+            {
+                while (true)
+                {
+                    int nestedCount = _nestedRoutines?.Count ?? 0;
+                    IEnumerator routine = nestedCount > 0 ? _nestedRoutines[nestedCount - 1] : _routine;
+
+                    if (routine.MoveNext())
+                    {
+                        if (routine.Current is IEnumerator nestedRoutine)
+                        {
+                            _nestedRoutines ??= new List<IEnumerator>();
+                            _nestedRoutines.Add(nestedRoutine);
+                            continue;
+                        }
+
+                        Current = routine.Current;
+                        return true;
+                    }
+
+                    if (nestedCount == 0)
+                    {
+                        return false;
+                    }
+
+                    _nestedRoutines.RemoveAt(nestedCount - 1);
+                }
             }
 
             public void Reset()
