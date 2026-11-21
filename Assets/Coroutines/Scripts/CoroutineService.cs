@@ -6,139 +6,54 @@ using UnityEngine;
 
 namespace AngryKoala.Coroutines
 {
-    [DefaultExecutionOrder(-1002)]
     public sealed class CoroutineService : BaseService<ICoroutineService>, ICoroutineService
     {
-        private readonly Dictionary<MonoBehaviour, List<Coroutine>> _ownedCoroutinesByOwner = new();
-        private readonly Dictionary<string, List<Coroutine>> _coroutinesByTag = new();
+        public int ActiveCoroutineCount => _trackedRoutines.Count;
 
-        private readonly Dictionary<Coroutine, CoroutineData> _dataByCoroutine = new();
+        private readonly List<TrackedRoutine> _trackedRoutines = new();
+        private readonly Dictionary<Coroutine, TrackedRoutine> _trackedRoutinesByCoroutine = new();
 
-#if UNITY_EDITOR
-        private bool _isEditorPaused;
-
-        private float _pauseStartRealtime;
-        private float _totalPauseDuration;
-        
-        private void OnEnable()
-        {
-            _isEditorPaused = false;
-            _totalPauseDuration = 0f;
-
-            UnityEditor.EditorApplication.pauseStateChanged += OnEditorPauseStateChanged;
-        }
+        private const string _delayedRoutineNamePrefix = "Delayed: ";
+        private const string _nextFrameRoutineNamePrefix = "Next frame: ";
 
         private void OnDisable()
         {
-            UnityEditor.EditorApplication.pauseStateChanged -= OnEditorPauseStateChanged;
+            StopAll();
         }
-        
-        private void OnEditorPauseStateChanged(UnityEditor.PauseState pauseState)
-        {
-            if (pauseState == UnityEditor.PauseState.Paused)
-            {
-                _isEditorPaused = true;
-                
-                _pauseStartRealtime = Time.realtimeSinceStartup;
-                return;
-            }
 
-            if (pauseState == UnityEditor.PauseState.Unpaused && _isEditorPaused)
-            {
-                float now = Time.realtimeSinceStartup;
-                
-                _totalPauseDuration += Mathf.Max(0f, now - _pauseStartRealtime);
-                _isEditorPaused = false;
-            }
-        }
-#endif
-
-        public Coroutine Run(IEnumerator routine)
+        public Coroutine Run(IEnumerator routine, MonoBehaviour owner = null, string tag = null)
         {
             if (routine == null)
             {
                 return null;
             }
 
-            TrackedRoutine trackedRoutine = new TrackedRoutine(this, null, null, routine);
-            Coroutine coroutine = StartCoroutine(trackedRoutine);
-            trackedRoutine.Coroutine = coroutine;
-
-            RegisterCoroutineData(coroutine, null, null, routine);
-
-            return coroutine;
+            return RunInternal(routine, owner, tag, GetDisplayName(routine.GetType().Name));
         }
 
-        public Coroutine Run(IEnumerator routine, string tag)
+        public Coroutine RunDelayed(Action action, float delaySeconds, DelayTime delayTime = DelayTime.Scaled,
+            MonoBehaviour owner = null, string tag = null)
         {
-            if (routine == null)
+            if (action == null)
             {
                 return null;
             }
 
-            TrackedRoutine trackedRoutine = new TrackedRoutine(this, null, tag, routine);
-            Coroutine coroutine = StartCoroutine(trackedRoutine);
-            trackedRoutine.Coroutine = coroutine;
+            string routineName = _delayedRoutineNamePrefix + GetDisplayName(action.Method.Name);
 
-            RegisterTag(tag, coroutine);
-            RegisterCoroutineData(coroutine, null, tag, routine);
-
-            return coroutine;
+            return RunInternal(DelayRoutine(action, delaySeconds, delayTime), owner, tag, routineName);
         }
 
-        public Coroutine Run(MonoBehaviour owner, IEnumerator routine)
+        public Coroutine RunNextFrame(Action action, MonoBehaviour owner = null, string tag = null)
         {
-            if (routine == null)
+            if (action == null)
             {
                 return null;
             }
 
-            TrackedRoutine trackedRoutine = new TrackedRoutine(this, owner, null, routine);
-            Coroutine coroutine = StartCoroutine(trackedRoutine);
-            trackedRoutine.Coroutine = coroutine;
+            string routineName = _nextFrameRoutineNamePrefix + GetDisplayName(action.Method.Name);
 
-            RegisterOwner(owner, coroutine);
-            RegisterCoroutineData(coroutine, owner, null, routine);
-
-            return coroutine;
-        }
-
-        public Coroutine Run(MonoBehaviour owner, IEnumerator routine, string tag)
-        {
-            if (routine == null)
-            {
-                return null;
-            }
-
-            TrackedRoutine trackedRoutine = new TrackedRoutine(this, owner, tag, routine);
-            Coroutine coroutine = StartCoroutine(trackedRoutine);
-            trackedRoutine.Coroutine = coroutine;
-
-            RegisterOwner(owner, coroutine);
-            RegisterTag(tag, coroutine);
-            RegisterCoroutineData(coroutine, owner, tag, routine);
-
-            return coroutine;
-        }
-
-        public Coroutine RunDelayed(Action action, float delaySeconds)
-        {
-            return Run(DelayRoutine(action, delaySeconds));
-        }
-
-        public Coroutine RunDelayed(Action action, float delaySeconds, string tag)
-        {
-            return Run(DelayRoutine(action, delaySeconds), tag);
-        }
-
-        public Coroutine RunDelayed(MonoBehaviour owner, Action action, float delaySeconds)
-        {
-            return Run(owner, DelayRoutine(action, delaySeconds));
-        }
-
-        public Coroutine RunDelayed(MonoBehaviour owner, Action action, float delaySeconds, string tag)
-        {
-            return Run(owner, DelayRoutine(action, delaySeconds), tag);
+            return RunInternal(NextFrameRoutine(action), owner, tag, routineName);
         }
 
         public void Stop(Coroutine coroutine)
@@ -148,89 +63,40 @@ namespace AngryKoala.Coroutines
                 return;
             }
 
-            try
+            if (_trackedRoutinesByCoroutine.TryGetValue(coroutine, out TrackedRoutine trackedRoutine))
             {
-                StopCoroutine(coroutine);
-            }
-            catch (Exception exception)
-            {
-                Debug.LogException(exception);
-            }
-
-            if (_dataByCoroutine.TryGetValue(coroutine, out CoroutineData data))
-            {
-                if (data.Owner != null)
-                {
-                    RemoveFromOwners(data.Owner, coroutine);
-                }
-
-                if (!string.IsNullOrEmpty(data.Tag))
-                {
-                    RemoveFromTags(data.Tag, coroutine);
-                }
-
-                _dataByCoroutine.Remove(coroutine);
+                StopInternal(trackedRoutine);
             }
         }
 
         public void StopAll()
         {
-            try
+            StopAllCoroutines();
+
+            for (int i = 0; i < _trackedRoutines.Count; i++)
             {
-                StopAllCoroutines();
-            }
-            catch (Exception exception)
-            {
-                Debug.LogException(exception);
+                _trackedRoutines[i].IsFinished = true;
             }
 
-            _ownedCoroutinesByOwner.Clear();
-            _coroutinesByTag.Clear();
-            _dataByCoroutine.Clear();
+            _trackedRoutines.Clear();
+            _trackedRoutinesByCoroutine.Clear();
         }
 
         public void StopAll(MonoBehaviour owner)
         {
-            if (owner == null)
+            if (ReferenceEquals(owner, null))
             {
                 return;
             }
 
-            if (_ownedCoroutinesByOwner.TryGetValue(owner, out List<Coroutine> coroutineList))
+            for (int i = _trackedRoutines.Count - 1; i >= 0; i--)
             {
-                Coroutine[] coroutines = coroutineList.ToArray();
+                TrackedRoutine trackedRoutine = _trackedRoutines[i];
 
-                for (int i = 0; i < coroutines.Length; i++)
+                if (ReferenceEquals(trackedRoutine.Owner, owner))
                 {
-                    Coroutine coroutine = coroutines[i];
-                    if (coroutine == null)
-                    {
-                        continue;
-                    }
-
-                    try
-                    {
-                        StopCoroutine(coroutine);
-                    }
-                    catch (Exception exception)
-                    {
-                        Debug.LogException(exception);
-                    }
-
-                    if (_dataByCoroutine.TryGetValue(coroutine, out CoroutineData data))
-                    {
-                        if (!string.IsNullOrEmpty(data.Tag))
-                        {
-                            RemoveFromTags(data.Tag, coroutine);
-                        }
-
-                        _dataByCoroutine.Remove(coroutine);
-                    }
-
-                    RemoveFromOwners(owner, coroutine);
+                    StopInternal(trackedRoutine);
                 }
-
-                _ownedCoroutinesByOwner.Remove(owner);
             }
         }
 
@@ -241,321 +107,240 @@ namespace AngryKoala.Coroutines
                 return;
             }
 
-            if (_coroutinesByTag.TryGetValue(tag, out List<Coroutine> coroutineList))
+            for (int i = _trackedRoutines.Count - 1; i >= 0; i--)
             {
-                Coroutine[] snapshot = coroutineList.ToArray();
+                TrackedRoutine trackedRoutine = _trackedRoutines[i];
 
-                for (int i = 0; i < snapshot.Length; i++)
+                if (trackedRoutine.Tag == tag)
                 {
-                    Coroutine coroutine = snapshot[i];
-                    if (coroutine == null)
-                    {
-                        continue;
-                    }
-
-                    try
-                    {
-                        StopCoroutine(coroutine);
-                    }
-                    catch (Exception exception)
-                    {
-                        Debug.LogException(exception);
-                    }
-
-                    if (_dataByCoroutine.TryGetValue(coroutine, out CoroutineData data))
-                    {
-                        if (data.Owner != null)
-                        {
-                            RemoveFromOwners(data.Owner, coroutine);
-                        }
-
-                        _dataByCoroutine.Remove(coroutine);
-                    }
-
-                    RemoveFromTags(tag, coroutine);
-                }
-
-                _coroutinesByTag.Remove(tag);
-            }
-        }
-
-        public IReadOnlyList<CoroutineData> GetData()
-        {
-            List<CoroutineData> list = new List<CoroutineData>(_dataByCoroutine.Count);
-            
-            float nowRealtime = Time.realtimeSinceStartup;
-            float nowTime = Time.time;
-
-            foreach (KeyValuePair<Coroutine, CoroutineData> keyValuePair in _dataByCoroutine)
-            {
-                list.Add(GetCoroutineDataCopy(keyValuePair.Value, nowTime, nowRealtime));
-            }
-
-            return list;
-        }
-
-        public IReadOnlyList<CoroutineData> GetData(MonoBehaviour owner)
-        {
-            if (owner == null)
-            {
-                return Array.Empty<CoroutineData>();
-            }
-
-            List<CoroutineData> list = new List<CoroutineData>();
-            
-            float nowRealtime = Time.realtimeSinceStartup;
-            float nowTime = Time.time;
-
-            foreach (KeyValuePair<Coroutine, CoroutineData> keyValuePair in _dataByCoroutine)
-            {
-                CoroutineData data = keyValuePair.Value;
-                if (data.Owner == owner)
-                {
-                    list.Add(GetCoroutineDataCopy(data, nowTime, nowRealtime));
+                    StopInternal(trackedRoutine);
                 }
             }
-
-            return list;
         }
 
-        public IReadOnlyList<CoroutineData> GetData(string tag)
+        public void GetData(List<CoroutineData> results)
         {
-            if (string.IsNullOrEmpty(tag))
+            if (results == null)
             {
-                return Array.Empty<CoroutineData>();
+                throw new ArgumentNullException(nameof(results));
             }
 
-            List<CoroutineData> list = new List<CoroutineData>();
-           
-            float nowRealtime = Time.realtimeSinceStartup;
-            float nowTime = Time.time;
+            results.Clear();
 
-            foreach (KeyValuePair<Coroutine, CoroutineData> keyValuePair in _dataByCoroutine)
+            float time = Time.time;
+            float unscaledTime = Time.unscaledTime;
+
+            for (int i = 0; i < _trackedRoutines.Count; i++)
             {
-                CoroutineData data = keyValuePair.Value;
-                if (data.Tag == tag)
+                TrackedRoutine trackedRoutine = _trackedRoutines[i];
+
+                results.Add(new CoroutineData(trackedRoutine.Coroutine, trackedRoutine.Owner, trackedRoutine.Tag,
+                    trackedRoutine.RoutineName, Mathf.Max(0f, time - trackedRoutine.StartedTime),
+                    Mathf.Max(0f, unscaledTime - trackedRoutine.StartedUnscaledTime)));
+            }
+        }
+
+        #region Internal Methods
+
+        private Coroutine RunInternal(IEnumerator routine, MonoBehaviour owner, string tag, string routineName)
+        {
+            if (!isActiveAndEnabled)
+            {
+                Debug.LogWarning($"{nameof(CoroutineService)} is disabled, so '{routineName}' was not started", this);
+                return null;
+            }
+
+            bool hasOwner = !ReferenceEquals(owner, null);
+
+            if (hasOwner && !IsOwnerActive(owner))
+            {
+                Debug.LogWarning($"The owner of '{routineName}' is destroyed or inactive, so it was not started",
+                    this);
+                return null;
+            }
+
+            var trackedRoutine = new TrackedRoutine(this, routine, owner, hasOwner,
+                string.IsNullOrEmpty(tag) ? null : tag, routineName);
+
+            _trackedRoutines.Add(trackedRoutine);
+
+            Coroutine coroutine = StartCoroutine(trackedRoutine);
+
+            if (trackedRoutine.IsFinished)
+            {
+                return null;
+            }
+
+            trackedRoutine.Coroutine = coroutine;
+            _trackedRoutinesByCoroutine[coroutine] = trackedRoutine;
+
+            return coroutine;
+        }
+
+        private void StopInternal(TrackedRoutine trackedRoutine)
+        {
+            if (trackedRoutine.IsFinished)
+            {
+                return;
+            }
+
+            if (trackedRoutine.Coroutine != null)
+            {
+                StopCoroutine(trackedRoutine.Coroutine);
+            }
+
+            RemoveTrackedRoutine(trackedRoutine);
+        }
+
+        #endregion
+
+        private void RemoveTrackedRoutine(TrackedRoutine trackedRoutine)
+        {
+            if (trackedRoutine.IsFinished)
+            {
+                return;
+            }
+
+            trackedRoutine.IsFinished = true;
+
+            _trackedRoutines.Remove(trackedRoutine);
+
+            if (trackedRoutine.Coroutine != null)
+            {
+                _trackedRoutinesByCoroutine.Remove(trackedRoutine.Coroutine);
+            }
+        }
+
+        private void LogRoutineException(TrackedRoutine trackedRoutine, Exception exception)
+        {
+            string ownerName = trackedRoutine.Owner != null ? trackedRoutine.Owner.name : "none";
+            string tag = trackedRoutine.Tag ?? "none";
+            UnityEngine.Object context = trackedRoutine.Owner != null ? trackedRoutine.Owner : this;
+
+            Debug.LogError(
+                $"Coroutine '{trackedRoutine.RoutineName}' (owner: {ownerName}, tag: {tag}) threw and was ended",
+                context);
+            Debug.LogException(exception, context);
+        }
+
+        private void Update()
+        {
+            StopRoutinesOfInactiveOwners();
+        }
+
+        private void StopRoutinesOfInactiveOwners()
+        {
+            for (int i = _trackedRoutines.Count - 1; i >= 0; i--)
+            {
+                TrackedRoutine trackedRoutine = _trackedRoutines[i];
+
+                if (trackedRoutine.HasOwner && !IsOwnerActive(trackedRoutine.Owner))
                 {
-                    list.Add(GetCoroutineDataCopy(data, nowTime, nowRealtime));
+                    StopInternal(trackedRoutine);
                 }
             }
-
-            return list;
-        }
-
-        public int GetActiveCoroutineCount()
-        {
-            return _dataByCoroutine.Count;
         }
 
         #region Utility
 
-        private void RegisterOwner(MonoBehaviour owner, Coroutine coroutine)
+        private static bool IsOwnerActive(MonoBehaviour owner)
         {
-            if (owner == null || coroutine == null)
-            {
-                return;
-            }
-
-            if (!_ownedCoroutinesByOwner.TryGetValue(owner, out List<Coroutine> coroutineList))
-            {
-                coroutineList = new List<Coroutine>();
-                _ownedCoroutinesByOwner.Add(owner, coroutineList);
-            }
-
-            coroutineList.Add(coroutine);
+            return owner != null && owner.gameObject.activeInHierarchy;
         }
 
-        private void RegisterTag(string tag, Coroutine coroutine)
+        private static string GetDisplayName(string compilerName)
         {
-            if (string.IsNullOrEmpty(tag) || coroutine == null)
+            int nameEnd = compilerName.IndexOf('>');
+
+            if (compilerName.StartsWith("<", StringComparison.Ordinal) && nameEnd > 1)
             {
-                return;
+                return compilerName.Substring(1, nameEnd - 1);
             }
 
-            if (!_coroutinesByTag.TryGetValue(tag, out List<Coroutine> coroutineList))
-            {
-                coroutineList = new List<Coroutine>();
-                _coroutinesByTag.Add(tag, coroutineList);
-            }
-
-            coroutineList.Add(coroutine);
+            return compilerName;
         }
 
-        private void RegisterCoroutineData(Coroutine coroutine, MonoBehaviour owner, string tag, IEnumerator routine)
+        private static IEnumerator DelayRoutine(Action action, float delaySeconds, DelayTime delayTime)
         {
-            if (coroutine == null)
+            float remainingSeconds = delaySeconds;
+
+            while (remainingSeconds > 0f)
             {
-                return;
+                yield return null;
+
+                remainingSeconds -= delayTime == DelayTime.Unscaled ? Time.unscaledDeltaTime : Time.deltaTime;
             }
 
-            string routineTypeName = routine != null ? routine.GetType().Name : "IEnumerator";
-            
-            float nowRealtime = Time.realtimeSinceStartup;
-            float nowTime = Time.time;
-            
-            CoroutineData data = new CoroutineData
-            {
-                Coroutine = coroutine,
-                Owner = owner,
-                Tag = tag,
-                RoutineTypeName = routineTypeName,
-                StartedTime = nowTime,
-                StartedRealtime = nowRealtime,
-                ElapsedTime = 0f,
-                ElapsedRealtime = 0f,
-#if UNITY_EDITOR
-                TotalPauseDuration = GetTotalPauseDuration(nowRealtime)
-#endif
-            };
-
-            _dataByCoroutine[coroutine] = data;
+            action.Invoke();
         }
 
-        private IEnumerator DelayRoutine(Action action, float delaySeconds)
+        private static IEnumerator NextFrameRoutine(Action action)
         {
-            if (delaySeconds > 0f)
-            {
-                yield return new WaitForSeconds(delaySeconds);
-            }
+            yield return null;
 
-            if (action != null)
-            {
-                action();
-            }
-        }
-
-        private void RemoveFromOwners(MonoBehaviour owner, Coroutine coroutine)
-        {
-            if (owner == null || coroutine == null)
-            {
-                return;
-            }
-
-            if (_ownedCoroutinesByOwner.TryGetValue(owner, out List<Coroutine> list))
-            {
-                list.Remove(coroutine);
-                if (list.Count == 0)
-                {
-                    _ownedCoroutinesByOwner.Remove(owner);
-                }
-            }
-        }
-
-        private void RemoveFromTags(string tag, Coroutine coroutine)
-        {
-            if (string.IsNullOrEmpty(tag) || coroutine == null)
-            {
-                return;
-            }
-
-            if (_coroutinesByTag.TryGetValue(tag, out List<Coroutine> list))
-            {
-                list.Remove(coroutine);
-                if (list.Count == 0)
-                {
-                    _coroutinesByTag.Remove(tag);
-                }
-            }
-        }
-        
-        private CoroutineData GetCoroutineDataCopy(CoroutineData data, float nowTime, float nowRealtime)
-        {
-            float elapsedTime = Mathf.Max(0f, nowTime - data.StartedTime);
-            float elapsedRealtime;
-
-#if UNITY_EDITOR
-            float currentTotalPauseDuration = GetTotalPauseDuration(nowRealtime);
-            float pauseDurationSinceStarted = Mathf.Max(0f, currentTotalPauseDuration - data.TotalPauseDuration);
-            elapsedRealtime = Mathf.Max(0f, (nowRealtime - data.StartedRealtime) - pauseDurationSinceStarted);
-#else
-            elapsedRealtime = Mathf.Max(0f, nowRealtime - data.StartedRealtime);
-#endif
-
-            return new CoroutineData
-            {
-                Coroutine = data.Coroutine,
-                Owner = data.Owner,
-                Tag = data.Tag,
-                RoutineTypeName = data.RoutineTypeName,
-                StartedTime = data.StartedTime,
-                StartedRealtime = data.StartedRealtime,
-                ElapsedTime = elapsedTime,
-                ElapsedRealtime = elapsedRealtime,
-#if UNITY_EDITOR
-                TotalPauseDuration = data.TotalPauseDuration
-#endif
-            };
-        }
-        
-#if UNITY_EDITOR
-        private float GetTotalPauseDuration(float nowRealtime)
-        {
-            if (_isEditorPaused)
-            {
-                return _totalPauseDuration + Mathf.Max(0f, nowRealtime - _pauseStartRealtime);
-            }
-
-            return _totalPauseDuration;
-        }
-#endif
-
-        private void OnTrackedRoutineCompleted(MonoBehaviour owner, string tag, Coroutine coroutine)
-        {
-            if (coroutine == null)
-            {
-                return;
-            }
-
-            if (owner != null)
-            {
-                RemoveFromOwners(owner, coroutine);
-            }
-
-            if (!string.IsNullOrEmpty(tag))
-            {
-                RemoveFromTags(tag, coroutine);
-            }
-
-            _dataByCoroutine.Remove(coroutine);
+            action.Invoke();
         }
 
         private sealed class TrackedRoutine : IEnumerator
         {
-            public object Current => _inner.Current;
+            public object Current => _routine.Current;
+
+            public Coroutine Coroutine { get; set; }
+            public bool IsFinished { get; set; }
+
+            public MonoBehaviour Owner { get; }
+            public bool HasOwner { get; }
+            public string Tag { get; }
+            public string RoutineName { get; }
+
+            public float StartedTime { get; }
+            public float StartedUnscaledTime { get; }
 
             private readonly CoroutineService _service;
+            private readonly IEnumerator _routine;
 
-            private readonly MonoBehaviour _owner;
-            private readonly string _tag;
-
-            private readonly IEnumerator _inner;
-
-            public TrackedRoutine(CoroutineService service, MonoBehaviour owner, string tag, IEnumerator inner)
+            public TrackedRoutine(CoroutineService service, IEnumerator routine, MonoBehaviour owner, bool hasOwner,
+                string tag, string routineName)
             {
                 _service = service;
-                _owner = owner;
-                _tag = tag;
-                _inner = inner;
-            }
+                _routine = routine;
 
-            public Coroutine Coroutine { private get; set; }
+                Owner = owner;
+                HasOwner = hasOwner;
+                Tag = tag;
+                RoutineName = routineName;
+
+                StartedTime = Time.time;
+                StartedUnscaledTime = Time.unscaledTime;
+            }
 
             public bool MoveNext()
             {
+                if (IsFinished)
+                {
+                    return false;
+                }
+
+                if (HasOwner && !IsOwnerActive(Owner))
+                {
+                    _service.RemoveTrackedRoutine(this);
+                    return false;
+                }
+
                 bool hasNext = false;
 
                 try
                 {
-                    hasNext = _inner.MoveNext();
+                    hasNext = _routine.MoveNext();
                 }
                 catch (Exception exception)
                 {
-                    Debug.LogException(exception);
+                    _service.LogRoutineException(this, exception);
                 }
 
                 if (!hasNext)
                 {
-                    _service.OnTrackedRoutineCompleted(_owner, _tag, Coroutine);
+                    _service.RemoveTrackedRoutine(this);
                     return false;
                 }
 

@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using AngryKoala.Services;
 using UnityEditor;
 using UnityEngine;
@@ -19,7 +18,7 @@ namespace AngryKoala.Coroutines
 
         private Vector2 _scroll;
 
-        private readonly HashSet<object> _pendingStopped = new();
+        private readonly List<CoroutineData> _rows = new();
 
         private SortField _sortField;
 
@@ -27,9 +26,9 @@ namespace AngryKoala.Coroutines
         {
             Owner,
             Tag,
-            RoutineType,
+            Routine,
             ElapsedTime,
-            ElapsedRealtime
+            ElapsedUnscaledTime
         }
 
         private bool _sortAscending;
@@ -104,15 +103,9 @@ namespace AngryKoala.Coroutines
                 return;
             }
 
-            try
+            if (_service == null)
             {
-                _service ??= ServiceLocator.Get<ICoroutineService>();
-            }
-            catch (Exception exception)
-            {
-                Debug.LogWarning(
-                    $"Failed to resolve ICoroutineService via ServiceLocator. {exception.Message}");
-                _service = null;
+                ServiceLocator.TryGet(out _service);
             }
         }
 
@@ -177,37 +170,9 @@ namespace AngryKoala.Coroutines
             GUILayout.Space(_filtersInitialSpacing);
             DrawFilters();
 
-            IReadOnlyList<CoroutineData> rows = _service.GetData() ?? Array.Empty<CoroutineData>();
-
-            if (_pendingStopped.Count > 0)
-            {
-                rows = rows.Where(coroutineData =>
-                    coroutineData.Coroutine != null && !_pendingStopped.Contains(coroutineData.Coroutine)).ToArray();
-            }
-
-            if (!string.IsNullOrWhiteSpace(_tagFilterText))
-            {
-                string tagString = _tagFilterText.Trim();
-                rows = rows.Where(coroutineData =>
-                        !string.IsNullOrEmpty(coroutineData.Tag) &&
-                        coroutineData.Tag.IndexOf(tagString, StringComparison.OrdinalIgnoreCase) >= 0)
-                    .ToArray();
-            }
-
-            if (!string.IsNullOrWhiteSpace(_searchText))
-            {
-                string searchString = _searchText;
-                rows = rows.Where(coroutineData =>
-                    (!string.IsNullOrEmpty(coroutineData.RoutineTypeName) &&
-                     coroutineData.RoutineTypeName.IndexOf(searchString, StringComparison.OrdinalIgnoreCase) >= 0) ||
-                    (!string.IsNullOrEmpty(coroutineData.Tag) &&
-                     coroutineData.Tag.IndexOf(searchString, StringComparison.OrdinalIgnoreCase) >= 0) ||
-                    (coroutineData.Owner != null &&
-                     coroutineData.Owner.name.IndexOf(searchString, StringComparison.OrdinalIgnoreCase) >= 0)
-                ).ToArray();
-            }
-
-            rows = SortRows(rows, _sortField, _sortAscending).ToArray();
+            _service.GetData(_rows);
+            FilterRows();
+            SortRows();
 
             GUILayout.Space(_headerSpacing);
 
@@ -237,7 +202,7 @@ namespace AngryKoala.Coroutines
             float blocksGap = 2f;
             float viewportHeight = position.height - toolbarHeight - filtersTotalHeight - headerTotalHeight - blocksGap;
 
-            bool scrollbarVisible = ScrollbarVisible(rows.Count, _rowHeight, _rowVerticalSpacing, viewportHeight);
+            bool scrollbarVisible = ScrollbarVisible(_rows.Count, _rowHeight, _rowVerticalSpacing, viewportHeight);
 
             if (scrollbarVisible)
             {
@@ -256,7 +221,7 @@ namespace AngryKoala.Coroutines
 
             _scroll = EditorGUILayout.BeginScrollView(_scroll, false, false, GUILayout.ExpandWidth(true));
 
-            foreach (CoroutineData row in rows)
+            foreach (CoroutineData row in _rows)
             {
                 DrawRow(row, baseColumnWidth, actionsColumnWidth);
             }
@@ -347,68 +312,16 @@ namespace AngryKoala.Coroutines
                 return;
             }
 
-            string trimmedTag = tag.Trim();
+            _service?.StopAll(tag.Trim());
 
-            try
-            {
-                IReadOnlyList<CoroutineData> all = _service?.GetData();
-                if (all == null)
-                {
-                    return;
-                }
-
-                foreach (CoroutineData coroutineData in all)
-                {
-                    if (coroutineData?.Coroutine == null)
-                    {
-                        continue;
-                    }
-
-                    if (!string.IsNullOrEmpty(coroutineData.Tag) && string.Equals(coroutineData.Tag, trimmedTag,
-                            StringComparison.OrdinalIgnoreCase))
-                    {
-                        _service.Stop(coroutineData.Coroutine);
-                        _pendingStopped.Add(coroutineData.Coroutine);
-                    }
-                }
-
-                GUI.changed = true;
-                Repaint();
-            }
-            catch (Exception exception)
-            {
-                Debug.LogWarning($"Stop All With Tag failed: {exception.Message}");
-            }
+            Repaint();
         }
 
         private void StopAll()
         {
-            try
-            {
-                IReadOnlyList<CoroutineData> coroutines = _service?.GetData();
-                if (coroutines == null)
-                {
-                    return;
-                }
+            _service?.StopAll();
 
-                foreach (CoroutineData coroutineData in coroutines)
-                {
-                    if (coroutineData?.Coroutine == null)
-                    {
-                        continue;
-                    }
-
-                    _service.Stop(coroutineData.Coroutine);
-                    _pendingStopped.Add(coroutineData.Coroutine);
-                }
-
-                GUI.changed = true;
-                Repaint();
-            }
-            catch (Exception exception)
-            {
-                Debug.LogWarning($"Stop All failed: {exception.Message}");
-            }
+            Repaint();
         }
 
         private void DrawHeaders(Rect rect, float baseColumnWidth, float actionsWidth)
@@ -423,7 +336,7 @@ namespace AngryKoala.Coroutines
                 _headerLightTexture);
             x += baseColumnWidth;
 
-            DrawHeaderCell("Routine Type", SortField.RoutineType, new Rect(x, rect.y, baseColumnWidth, rect.height),
+            DrawHeaderCell("Routine", SortField.Routine, new Rect(x, rect.y, baseColumnWidth, rect.height),
                 _headerDarkTexture);
             x += baseColumnWidth;
 
@@ -431,7 +344,7 @@ namespace AngryKoala.Coroutines
                 _headerLightTexture);
             x += baseColumnWidth;
 
-            DrawHeaderCell("Elapsed (Realtime)", SortField.ElapsedRealtime,
+            DrawHeaderCell("Elapsed (Unscaled)", SortField.ElapsedUnscaledTime,
                 new Rect(x, rect.y, baseColumnWidth, rect.height),
                 _headerDarkTexture);
             x += baseColumnWidth;
@@ -517,7 +430,7 @@ namespace AngryKoala.Coroutines
 
             DrawCellBackground(new Rect(innerX, inner.y, columnWidth, innerHeight), _darkTexture);
             GUI.Label(new Rect(innerX + _cellPadX, inner.y, columnWidth - _cellPadX * 2f, innerHeight),
-                string.IsNullOrEmpty(data.RoutineTypeName) ? "-" : data.RoutineTypeName, _backgroundStyle);
+                string.IsNullOrEmpty(data.RoutineName) ? "-" : data.RoutineName, _backgroundStyle);
             innerX += columnWidth;
 
             DrawCellBackground(new Rect(innerX, inner.y, columnWidth, innerHeight), _lightTexture);
@@ -528,7 +441,7 @@ namespace AngryKoala.Coroutines
 
             DrawCellBackground(new Rect(innerX, inner.y, columnWidth, innerHeight), _darkTexture);
             GUI.Label(new Rect(innerX + _cellPadX, inner.y, columnWidth - _cellPadX * 2f, innerHeight),
-                $"{data.ElapsedRealtime:F3}",
+                $"{data.ElapsedUnscaledTime:F3}",
                 _backgroundStyle);
             innerX += columnWidth;
 
@@ -550,22 +463,9 @@ namespace AngryKoala.Coroutines
 
             if (GUI.Button(stopRect, "Stop", _miniButtonStyle))
             {
-                try
-                {
-                    if (data.Coroutine != null)
-                    {
-                        _service.Stop(data.Coroutine);
-                        _pendingStopped.Add(data.Coroutine);
-                    }
-                }
-                catch (Exception exception)
-                {
-                    Debug.LogWarning($"CoroutineInspector Stop failed: {exception.Message}");
-                }
+                _service.Stop(data.Coroutine);
 
-                GUI.changed = true;
                 Repaint();
-                EditorApplication.delayCall += Repaint;
             }
         }
 
@@ -602,27 +502,62 @@ namespace AngryKoala.Coroutines
             return texture;
         }
 
-        private static IEnumerable<CoroutineData> SortRows(IEnumerable<CoroutineData> source, SortField field, bool asc)
+        private void FilterRows()
         {
-            IOrderedEnumerable<CoroutineData> ordered = field switch
+            string tagFilter = string.IsNullOrWhiteSpace(_tagFilterText) ? null : _tagFilterText.Trim();
+            string search = string.IsNullOrWhiteSpace(_searchText) ? null : _searchText;
+
+            if (tagFilter == null && search == null)
             {
-                SortField.Owner => source.OrderBy(
-                    coroutineData => coroutineData.Owner != null ? coroutineData.Owner.name : string.Empty,
-                    StringComparer.OrdinalIgnoreCase),
+                return;
+            }
 
-                SortField.Tag => source.OrderBy(coroutineData => coroutineData.Tag ?? string.Empty,
-                    StringComparer.OrdinalIgnoreCase),
+            for (int i = _rows.Count - 1; i >= 0; i--)
+            {
+                CoroutineData row = _rows[i];
 
-                SortField.RoutineType => source.OrderBy(coroutineData => coroutineData.RoutineTypeName ?? string.Empty,
-                    StringComparer.OrdinalIgnoreCase),
+                bool matchesTag = tagFilter == null || Contains(row.Tag, tagFilter);
+                bool matchesSearch = search == null || Contains(row.RoutineName, search) ||
+                                     Contains(row.Tag, search) || Contains(GetOwnerName(row), search);
 
-                SortField.ElapsedTime => source.OrderBy(coroutineData => coroutineData.ElapsedTime),
+                if (!matchesTag || !matchesSearch)
+                {
+                    _rows.RemoveAt(i);
+                }
+            }
+        }
 
-                SortField.ElapsedRealtime => source.OrderBy(coroutineData => coroutineData.ElapsedRealtime),
-                _ => source.OrderBy(_ => 0)
+        private void SortRows()
+        {
+            _rows.Sort(CompareRows);
+        }
+
+        private int CompareRows(CoroutineData left, CoroutineData right)
+        {
+            int result = _sortField switch
+            {
+                SortField.Owner => string.Compare(GetOwnerName(left), GetOwnerName(right),
+                    StringComparison.OrdinalIgnoreCase),
+                SortField.Tag => string.Compare(left.Tag ?? string.Empty, right.Tag ?? string.Empty,
+                    StringComparison.OrdinalIgnoreCase),
+                SortField.Routine => string.Compare(left.RoutineName ?? string.Empty,
+                    right.RoutineName ?? string.Empty, StringComparison.OrdinalIgnoreCase),
+                SortField.ElapsedTime => left.ElapsedTime.CompareTo(right.ElapsedTime),
+                SortField.ElapsedUnscaledTime => left.ElapsedUnscaledTime.CompareTo(right.ElapsedUnscaledTime),
+                _ => 0
             };
 
-            return asc ? ordered : ordered.Reverse();
+            return _sortAscending ? result : -result;
+        }
+
+        private static string GetOwnerName(CoroutineData data)
+        {
+            return data.Owner != null ? data.Owner.name : string.Empty;
+        }
+
+        private static bool Contains(string text, string value)
+        {
+            return !string.IsNullOrEmpty(text) && text.IndexOf(value, StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         private static void DrawCellBackground(Rect rect, Texture2D texture)

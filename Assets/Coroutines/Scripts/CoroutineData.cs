@@ -1,26 +1,28 @@
-using System;
 using UnityEngine;
 
 namespace AngryKoala.Coroutines
 {
-    [Serializable]
-    public sealed class CoroutineData
+    public readonly struct CoroutineData
     {
-        public Coroutine Coroutine;
-        
-        public MonoBehaviour Owner;
-        public string Tag;
+        public Coroutine Coroutine { get; }
 
-        public string RoutineTypeName;
+        public MonoBehaviour Owner { get; }
+        public string Tag { get; }
 
-        public float StartedTime;
-        public float StartedRealtime;
+        public string RoutineName { get; }
 
-        public float ElapsedTime;
-        public float ElapsedRealtime;
+        public float ElapsedTime { get; }
+        public float ElapsedUnscaledTime { get; }
 
-#if UNITY_EDITOR
-        public float TotalPauseDuration;
-#endif
+        public CoroutineData(Coroutine coroutine, MonoBehaviour owner, string tag, string routineName,
+            float elapsedTime, float elapsedUnscaledTime)
+        {
+            Coroutine = coroutine;
+            Owner = owner;
+            Tag = tag;
+            RoutineName = routineName;
+            ElapsedTime = elapsedTime;
+            ElapsedUnscaledTime = elapsedUnscaledTime;
+        }
     }
 }
