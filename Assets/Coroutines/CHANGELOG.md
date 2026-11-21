@@ -34,6 +34,9 @@ All notable changes to this package are documented here. The format follows [Kee
 - Coroutines of a destroyed or deactivated owner kept running. They now end with the owner.
 - Records stayed in the service after its GameObject was deactivated. Deactivating the service now stops everything and clears its records.
 - Exceptions were logged without context. They now include the owner, tag and routine name.
+- A nested routine (`yield return Inner();`) that threw was logged by Unity alone and left its record behind. The service now steps nested routines itself.
+- The Coroutine Inspector kept showing an empty table after the service was destroyed. It now looks for the service again.
+- Reopening the Coroutine Inspector could draw with missing textures.
 - The Coroutine Inspector resolved the service in a way that logged an error under Services 2.0 when it was missing. It now uses `TryGet`.
 
 ## Upgrading from 1.x

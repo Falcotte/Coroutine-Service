@@ -1,212 +1,181 @@
-# Coroutine Service
+# Angry Koala Coroutines
 
-A robust, centralized **Coroutine Service** for Unity that enables starting, tagging, monitoring, and managing coroutines globally — with full runtime introspection in the **Coroutine Inspector** editor window.
+A coroutine service for Unity. Systems start coroutines through one service, optionally tagged and tied to an owner `MonoBehaviour`. The service keeps a record of each running coroutine, stops the ones whose owner goes away, and can stop them in bulk by owner or tag. The Coroutine Inspector shows the running coroutines live in Play Mode. The module depends on the Services module to find the service.
 
-This service replaces ad-hoc `StartCoroutine()` calls with a powerful, organized system that tracks ownership, tags, elapsed time, and allows bulk stopping or filtering directly in the Unity Editor.
+**Use it for**
 
----
+- Timing that the game's rules depend on, for example a cooldown or a delayed spawn.
+- Sequences that must be stopped by owner or tag, for example everything an enemy started when it dies.
+- Seeing which coroutines are running, and how long they have run, while the game is in Play Mode.
 
-## ✨ Features
+**Do not use it for**
 
-- **Centralized coroutine management**
-- **Supports tags** and **owners** for structured control
-- **Automatic cleanup** when owners are destroyed
-- **Elapsed time tracking** (both scaled and unscaled)
-- **Delayed execution helpers**
-- **Pause-aware elapsed time in Editor**
-- **Inspector window** for live coroutine inspection, sorting, and stopping
-- Integrates seamlessly with the **Angry Koala Service Locator**
+- Motion for show, for example a fade or a bounce. Use a tween (DOTween) for that. A tween is not a coroutine, and the Coroutine Service is not built to run many of them.
 
----
+## Install
 
-## 🧩 Architecture Overview
+Add the package to the project's `Packages/manifest.json`. The Services module must be listed too:
 
-### Core Components
-
-#### `ICoroutineService`
-
-Defines the interface that all coroutine services must implement:
-
+```json
+"com.angrykoala.coroutines": "https://github.com/Falcotte/Coroutine-Service.git?path=/Assets/Coroutines#v2.0.0",
+"com.angrykoala.services": "https://github.com/Falcotte/Service-Locator.git?path=/Assets/Services#v2.0.0"
 ```
+
+Unity does not resolve git dependencies between packages. Each AngryKoala module must be listed in the project's own `manifest.json`.
+
+Minimum Unity version: 6000.3 (from `package.json`). Developed and tested on Unity 6000.6.
+
+## Public interface
+
+```csharp
 public interface ICoroutineService : IService
 {
-    Coroutine Run(IEnumerator routine);
-    Coroutine Run(IEnumerator routine, string tag);
-    Coroutine Run(MonoBehaviour owner, IEnumerator routine);
-    Coroutine Run(MonoBehaviour owner, IEnumerator routine, string tag);
+    // The number of coroutines the service is tracking.
+    int ActiveCoroutineCount { get; }
 
-    Coroutine RunDelayed(Action action, float delaySeconds);
-    Coroutine RunDelayed(Action action, float delaySeconds, string tag);
-    Coroutine RunDelayed(MonoBehaviour owner, Action action, float delaySeconds);
-    Coroutine RunDelayed(MonoBehaviour owner, Action action, float delaySeconds, string tag);
+    // Runs the routine. With an owner, it ends when the owner is destroyed or its GameObject is deactivated. Returns null if the routine finished at once or was not started.
+    Coroutine Run(IEnumerator routine, MonoBehaviour owner = null, string tag = null);
 
+    // Calls the action after the delay, in scaled or unscaled seconds. A delay of zero or less calls it before the method returns.
+    Coroutine RunDelayed(Action action, float delaySeconds, DelayTime delayTime = DelayTime.Scaled, MonoBehaviour owner = null, string tag = null);
+
+    // Calls the action on the next frame.
+    Coroutine RunNextFrame(Action action, MonoBehaviour owner = null, string tag = null);
+
+    // Stops one coroutine and removes its record.
     void Stop(Coroutine coroutine);
+
+    // Stops every coroutine and removes every record.
     void StopAll();
+
+    // Stops every coroutine started with the owner.
     void StopAll(MonoBehaviour owner);
+
+    // Stops every coroutine started with the tag. Null or empty tags do nothing.
     void StopAll(string tag);
 
-    IReadOnlyList<CoroutineData> GetData();
-    IReadOnlyList<CoroutineData> GetData(MonoBehaviour owner);
-    IReadOnlyList<CoroutineData> GetData(string tag);
-
-    int GetActiveCoroutineCount();
+    // Clears the list and fills it with a snapshot of every running coroutine. Meant for tools.
+    void GetData(List<CoroutineData> results);
 }
-```
 
-This provides a unified API for launching and managing coroutines from anywhere in your project.
-
-#### `CoroutineService`
-
-Implements the runtime logic of the service and integrates with Unity’s coroutine system.
-Supports:
-
-* Running coroutines globally or per-owner
-
-* Tag-based grouping and filtering
-
-* Safe stopping of individual, tagged, or owner-based coroutines
-
-* Runtime introspection and elapsed time tracking
-
-All active coroutines are stored with rich metadata (`CoroutineData`) for debugging, inspection, and analytics.
-
-#### `CoroutineData`
-
-Holds metadata about a running coroutine:
-
-```
-public sealed class CoroutineData
+public readonly struct CoroutineData
 {
-    public Coroutine Coroutine;
-    public MonoBehaviour Owner;
-    public string Tag;
-    public string RoutineTypeName;
+    // The Unity coroutine handle.
+    public Coroutine Coroutine { get; }
 
-    public float StartedTime;
-    public float StartedRealtime;
-    public float ElapsedTime;
-    public float ElapsedRealtime;
+    // The owner passed to Run, or null.
+    public MonoBehaviour Owner { get; }
+
+    // The tag passed to Run, or null.
+    public string Tag { get; }
+
+    // The name of the routine: the iterator method, or the method that declares the action.
+    public string RoutineName { get; }
+
+    // Seconds since the routine started, in scaled game time.
+    public float ElapsedTime { get; }
+
+    // Seconds since the routine started, in unscaled time.
+    public float ElapsedUnscaledTime { get; }
+}
+
+public enum DelayTime
+{
+    // Counts with Time.deltaTime. Stops while Time.timeScale is 0.
+    Scaled,
+
+    // Counts with Time.unscaledDeltaTime. Keeps counting while Time.timeScale is 0.
+    Unscaled
 }
 ```
 
-When running inside the Editor, it also tracks **pause duration** so elapsed realtime stays accurate across editor pauses.
+## Example
 
-#### `CoroutineInspectorEditorWindow`
+A system that starts a spawn timer when it is enabled and stops it when the enemy dies. The owner is the enemy, so the timer also ends if the enemy is destroyed.
 
-A custom Unity Editor window for **visualizing and managing coroutines** live during Play Mode.
-
-Open via:
-
-```Menu → Angry Koala → Coroutines → Coroutine Inspector```
-
-Features:
-
-* Lists all active coroutines with columns for:
-
-  * Owner
-
-  * Tag
-
-  * Routine Type
-
-  * Elapsed Time / Realtime
-
-* Search and filter by tag or routine name
-
-* Sort by any column
-
-* Stop individual or grouped coroutines
-
-* Ping the owner object
-
-* Auto-refresh (configurable)
-
----
-
-## 🧠 Usage Example
-
-### 1. Starting Coroutines
-
-```
+```csharp
+using System.Collections;
 using AngryKoala.Coroutines;
+using AngryKoala.Services;
 using UnityEngine;
 
-public class ExampleUsage : MonoBehaviour
+public sealed class EnemySpawner : MonoBehaviour
 {
+    [SerializeField] private float _spawnInterval = 2f;
+
+    private ICoroutineService _coroutineService;
+
     private void Start()
     {
-        // Start a simple routine
-        ServiceLocator.Get<ICoroutineService>().Run(MyRoutine());
+        _coroutineService = ServiceLocator.Get<ICoroutineService>();
 
-        // Start with owner tracking
-        ServiceLocator.Get<ICoroutineService>().Run(this, OwnerRoutine());
-
-        // Start with a tag
-        ServiceLocator.Get<ICoroutineService>().Run(this, TaggedRoutine(), "Gameplay");
+        _coroutineService.Run(SpawnLoop(), this, "Spawning");
+        _coroutineService.RunDelayed(StartBossIntro, 3f, DelayTime.Unscaled, this, "Intro");
     }
 
-    private IEnumerator MyRoutine()
+    private void OnDisable()
     {
-        yield return new WaitForSeconds(1f);
-        Debug.Log("Routine completed!");
+        _coroutineService?.StopAll(this);
     }
 
-    private IEnumerator OwnerRoutine()
+    private IEnumerator SpawnLoop()
     {
         while (true)
         {
-            yield return null;
+            yield return new WaitForSeconds(_spawnInterval);
+            Spawn();
         }
     }
 
-    private IEnumerator TaggedRoutine()
+    private void Spawn()
     {
-        yield return new WaitForSeconds(3f);
+    }
+
+    private void StartBossIntro()
+    {
     }
 }
 ```
 
-### 2. Stopping Coroutines
+## Rules
 
-```
-private void OnDisable()
-{
-    var service = ServiceLocator.Get<ICoroutineService>();
+- An owner's coroutines end when the owner is destroyed or its GameObject becomes inactive in the hierarchy. Disabling only the component does not end them.
+- `Run`, `RunDelayed` and `RunNextFrame` with a destroyed or inactive owner do not start, and log a warning.
+- Disabling or destroying the service stops every coroutine and clears its records. A disabled service refuses `Run` and the other start methods, and logs a warning.
+- A routine that finishes before `Run` returns gives back null, and leaves no record.
+- `RunDelayed` with a delay of zero or less calls the action before it returns.
+- `DelayTime.Unscaled` keeps counting while `Time.timeScale` is 0.
+- A routine that throws is logged with its owner, tag and routine name, and then ends. The other coroutines keep running.
+- A routine that yields another `IEnumerator` (`yield return Inner();`) is stepped by the service, so the owner rule and the exception rule cover the nested routine too.
+- `Stop` does not resume a routine that is waiting on the stopped coroutine with `yield return`. That is Unity's behaviour.
+- Stopping a routine does not run its `finally` blocks. That is Unity's behaviour too.
+- `GetData` fills the list you pass in. It is meant for tools, not for gameplay code.
+- Start order: the service registers itself in `Awake`. Callers resolve it in `Start` or later, with `ServiceLocator.Get<ICoroutineService>()`. The service has no `DefaultExecutionOrder`.
 
-    // Stop all coroutines owned by this MonoBehaviour
-    service.StopAll(this);
+## What it needs
 
-    // Or stop all coroutines with a given tag
-    service.StopAll("Gameplay");
-}
-```
+- Unity 6000.3 or later.
+- The Services module, `com.angrykoala.services` 2.0.0, listed in the project's `manifest.json`.
+- Tests need `com.unity.test-framework`.
 
-### 3. Using Delayed Actions
+## Coroutine Inspector
 
-```
-service.RunDelayed(() => Debug.Log("Executed after 2s"), 2f, "UI");
-```
+Open it from **Angry Koala > Coroutines > Coroutine Inspector**. It works in Play Mode only.
 
----
+The window lists each running coroutine with its owner, tag, routine name, and scaled and unscaled elapsed time. It has:
 
-## 🧱 Extending the System
+- A search box for routine name, tag and owner name, and a tag filter.
+- Sorting by any column.
+- Per-row **Stop** and **Ping Owner** buttons.
+- **Stop All** and **Stop All With Tag** buttons.
+- Refresh and an Auto-refresh toggle. Auto-refresh is on by default. The search, filter, sort and toggle settings are remembered in EditorPrefs.
 
-You can extend the service for advanced scheduling or visualization:
+## Tests
 
-* Add **custom columns** to the inspector for your coroutine metadata.
+The module has Play Mode tests in `Assets/Coroutines/Tests/Runtime`. There is no Edit Mode test assembly, because coroutines run only in Play Mode. Run them from the Test Runner, in Play Mode.
 
-* Integrate with profiling tools to measure coroutine load.
+## Status
 
-* Build **editor utilities** that use `ICoroutineService.GetData()` for runtime analytics or visual debugging.
+Tested: 35 Play Mode tests pass on Unity 6000.6.4f1.
 
----
-
-## 🪲 Debugging Tips
-
-* **Coroutines not visible?** Ensure Play Mode is active and the service is initialized (added to the scene).
-
-* **Tag filtering not working?** Tags are case-insensitive but must be non-empty.
-
-* **Elapsed time mismatch?** Check that your game time scale hasn’t changed — the inspector shows both scaled and realtime values.
-
-* **Stop buttons not responding?** Verify `ICoroutineService` is registered with the Service Locator.
+Not tested: Unity 6000.3, and player builds. Neither has been verified.
