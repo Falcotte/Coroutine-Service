@@ -252,12 +252,20 @@ namespace AngryKoala.Coroutines
         {
             int nameEnd = compilerName.IndexOf('>');
 
-            if (compilerName.StartsWith("<", StringComparison.Ordinal) && nameEnd > 1)
+            if (nameEnd < 0)
             {
-                return compilerName.Substring(1, nameEnd - 1);
+                return compilerName;
             }
 
-            return compilerName;
+            int nameStart = compilerName.LastIndexOf('<', nameEnd) + 1;
+            int nameLength = nameEnd - nameStart;
+
+            if (nameStart == 0 || nameLength == 0)
+            {
+                return compilerName;
+            }
+
+            return compilerName.Substring(nameStart, nameLength);
         }
 
         private static IEnumerator DelayRoutine(Action action, float delaySeconds, DelayTime delayTime)

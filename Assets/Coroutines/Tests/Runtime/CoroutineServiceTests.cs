@@ -480,6 +480,20 @@ namespace AngryKoala.Coroutines.Tests
         }
 
         [UnityTest]
+        public IEnumerator GetData_DelayedLambda_IsNamedAfterItsMethod()
+        {
+            var results = new List<CoroutineData>();
+
+            _service.RunDelayed(() => _stepCount++, 100f);
+            _service.GetData(results);
+
+            Assert.That(results[0].RoutineName,
+                Is.EqualTo("Delayed: " + nameof(GetData_DelayedLambda_IsNamedAfterItsMethod)));
+
+            yield return null;
+        }
+
+        [UnityTest]
         public IEnumerator GetData_NullList_Throws()
         {
             Assert.Throws<ArgumentNullException>(() => _service.GetData(null));
